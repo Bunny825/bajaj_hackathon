@@ -1,0 +1,12 @@
+__pycache__/
+*.pt
+*.pkl
+*.bin
+*.log
+*.csv
+*.ipynb
+venv/
+.env
+*.tar.gz
+*.zip
+.DS_Store

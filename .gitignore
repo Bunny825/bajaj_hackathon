@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.py[cod]
+venv/
+*.sqlite3
+*.log
+.DS_Store
+*.pkl
