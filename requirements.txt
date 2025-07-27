@@ -19,5 +19,4 @@ pytesseract==0.3.10
 ocrmypdf==14.1.0
 layoutparser==0.3.4
 Pillow==11.3.0
-scipy==1.15.3 --no-binary scipy
 pypdf==5.8.0
