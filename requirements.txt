@@ -11,9 +11,10 @@ requests
 cassio
 astrapy
 beautifulsoup4
+
 torch==2.7.1
 torchvision==0.22.1
-onnxruntime==1.19.1
+onnxruntime==1.19.2
 pytesseract==0.3.10
 ocrmypdf==14.1.0
 layoutparser==0.3.5
