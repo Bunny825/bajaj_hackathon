@@ -1,4 +1,11 @@
 fastapi
+torch==2.2.2+cpu --find-links https://download.pytorch.org/whl/torch_stable.html
+torchvision==0.15.2+cpu --find-links https://download.pytorch.org/whl/torch_stable.html
+onnxruntime==1.19.1
+pytesseract==0.3.10
+ocrmypdf==14.1.0
+layoutparser==0.3.5
+Pillow==11.3.0
 uvicorn
 openai
 langchain
