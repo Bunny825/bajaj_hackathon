@@ -11,8 +11,8 @@ requests
 cassio
 astrapy
 beautifulsoup4
-torch==2.2.1+cpu --find-links https://download.pytorch.org/whl/torch_stable.html
-torchvision==0.15.2+cpu --find-links https://download.pytorch.org/whl/torch_stable.html
+torch==2.7.1
+torchvision==0.22.1
 onnxruntime==1.19.1
 pytesseract==0.3.10
 ocrmypdf==14.1.0
