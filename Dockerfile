@@ -1,42 +1,55 @@
-# ---------- Stage 1: Build dependencies ---------- #
-FROM python:3.11-slim as builder
+# ---- Builder Stage ----
+# Use a more complete image that has build tools, and name this stage "builder"
+FROM python:3.11 as builder
 
+# Set the working directory
 WORKDIR /app
 
-# Install system dependencies only for building
-RUN apt-get update && apt-get install -y \
+# Install system dependencies required for building Python packages.
+# We add build-essential here for any packages that need to be compiled.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    libpoppler-cpp-dev \
-    libmagic-dev \
-    tesseract-ocr \
     poppler-utils \
-    && apt-get clean
+    libmagic-dev \
+    && rm -rf /var/lib/apt/lists/*
 
+# Create and activate a virtual environment. This is a best practice.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy only the requirements file to leverage Docker's layer caching
 COPY requirements.txt .
 
-# Install requirements locally to /root/.local
-RUN pip install --user --no-cache-dir -r requirements.txt
+# Install the python dependencies into the virtual environment
+RUN pip install --no-cache-dir -r requirements.txt
 
-# ---------- Stage 2: Runtime-only minimal ---------- #
+
+# ---- Final Stage ----
+# Use the slim image for a smaller final image size
 FROM python:3.11-slim
 
+# Set the working directory
 WORKDIR /app
 
-# Add the installed pip binaries to PATH
-ENV PATH="/root/.local/bin:$PATH"
-
-# Re-install minimal runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libpoppler-cpp-dev \
-    libmagic-dev \
-    tesseract-ocr \
+# Install only the RUNTIME system dependencies. We don't need build-essential here.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    libmagic-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy app code and pip-installed packages
-COPY --from=builder /root/.local /root/.local
+# Copy the virtual environment from the builder stage.
+# This is the key step that reduces the image size, as it doesn't bring
+# along the build tools and other intermediate files.
+COPY --from=builder /opt/venv /opt/venv
+
+# Copy your application code
 COPY . .
 
+# Activate the virtual environment in the final image
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Expose the port your application will run on
 EXPOSE 8000
 
+# Command to run your application
 CMD ["uvicorn", "main_api:app", "--host", "0.0.0.0", "--port", "8000"]
