@@ -5,13 +5,23 @@ FROM python:3.11 as builder
 # Set the working directory
 WORKDIR /app
 
-# Install system dependencies required for building Python packages.
-# Added libgl1-mesa-glx to fix the "libGL.so.1" error from OpenCV.
+# =================================================================================
+# Install a comprehensive set of common system dependencies to prevent
+# "cannot open shared object file" errors for libraries like OpenCV and Poppler.
+# =================================================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     poppler-utils \
     libmagic-dev \
+    # --- Dependencies for OpenCV, graphics, and rendering ---
     libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    # --- Font and other common utilities ---
+    libfontconfig1 \
+    libx11-6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create and activate a virtual environment
@@ -21,12 +31,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy only the requirements file to leverage Docker's layer caching
 COPY requirements.txt .
 
-# =================================================================================
-# CRITICAL CHANGE HERE:
-# Install PyTorch with the --index-url flag to get the much smaller CPU version.
-# Then install the rest of your requirements. Pip will see torch is already
-# installed and won't try to download the huge default version.
-# =================================================================================
+# Install the smaller CPU-only version of PyTorch first to prevent downloading
+# the massive default version with GPU support.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
@@ -38,12 +44,19 @@ FROM python:3.11-slim
 # Set the working directory
 WORKDIR /app
 
-# Install only the RUNTIME system dependencies.
-# Added libgl1-mesa-glx here as well for the final runtime environment.
+# Install the same comprehensive set of RUNTIME system dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libmagic-dev \
+    # --- Dependencies for OpenCV, graphics, and rendering ---
     libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    # --- Font and other common utilities ---
+    libfontconfig1 \
+    libx11-6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment from the builder stage
