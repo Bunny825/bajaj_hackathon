@@ -6,10 +6,12 @@ FROM python:3.11 as builder
 WORKDIR /app
 
 # Install system dependencies required for building Python packages.
+# Added libgl1-mesa-glx to fix the "libGL.so.1" error from OpenCV.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     poppler-utils \
     libmagic-dev \
+    libgl1-mesa-glx \
     && rm -rf /var/lib/apt/lists/*
 
 # Create and activate a virtual environment
@@ -36,10 +38,12 @@ FROM python:3.11-slim
 # Set the working directory
 WORKDIR /app
 
-# Install only the RUNTIME system dependencies
+# Install only the RUNTIME system dependencies.
+# Added libgl1-mesa-glx here as well for the final runtime environment.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libmagic-dev \
+    libgl1-mesa-glx \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment from the builder stage
