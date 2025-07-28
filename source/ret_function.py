@@ -1,5 +1,6 @@
 import os
-import requests
+import asyncio
+import httpx # Using httpx for async requests
 from uuid import uuid4
 from dotenv import load_dotenv
 from langchain_core.documents import Document
@@ -8,71 +9,78 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_unstructured import UnstructuredLoader
+from langchain_unstructured import UnstructuredFileLoader # Using UnstructuredFileLoader for in-memory processing
 from langchain_community.vectorstores import Cassandra
-from langchain.indexes.vectorstore import VectorStoreIndexWrapper
 
 import cassio
 
+# --- Initialization (runs only once on startup) ---
 load_dotenv()
 ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
 ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
 ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
 
-cassio.init(
-    token=ASTRA_DB_APPLICATION_TOKEN,
-    database_id=ASTRA_DB_ID
-)
+cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
+# Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
-llm = ChatOpenAI()
-
+llm = ChatOpenAI(model="gpt-3.5-turbo") # Using a faster model can also help
 astra_vector_store = Cassandra(
     embedding=embeddings,
-    table_name="bajaj_insurance",
+    table_name="bajaj_insurance_policy_prod", # Use a more descriptive table name
     session=None,
-    keyspace=ASTRA_DB_KEYSPACE
+    keyspace=ASTRA_DB_KEYSPACE,
 )
+retriever = astra_vector_store.as_retriever(search_kwargs={"k": 3})
 
-last_url = None
+# A simple in-memory cache to track processed URLs
+processed_urls = set()
 
+# --- Core Asynchronous Function ---
+async def insurance_answer(url: str, queries: list[str]) -> list[str]:
+    """
+    Asynchronously processes a document and answers questions about it.
+    """
+    global processed_urls
 
-def insurance_answer(url, queries):
-    global last_url
+    # 1. DATA INGESTION (only if document is new)
+    if url not in processed_urls:
+        print(f"New document URL received: {url}. Processing...")
+        # For this specific use case, we clear the store for each new document.
+        # In a real-world app, you'd manage different documents differently.
+        await astra_vector_store.aclear()
 
-    if url != last_url:
-        astra_vector_store.clear() 
-        last_url = url
-
-        file_path = f"/tmp/{uuid4()}.pdf"
-        try:
-            response = requests.get(url)
+        # Asynchronously download the PDF content
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=30.0)
             response.raise_for_status()
-            with open(file_path, "wb") as f:
-                f.write(response.content)
+            pdf_content = response.content
 
-            loader = UnstructuredLoader(file_path)
-            docs = loader.load()
-        finally:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+        # Process the document in memory
+        file_path = f"/tmp/{uuid4()}.pdf"
+        with open(file_path, "wb") as f:
+            f.write(pdf_content)
+        
+        loader = UnstructuredFileLoader(file_path)
+        docs = await loader.aload() # Async loading
+        os.remove(file_path) # Clean up the temp file
 
-        splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-            chunk_size=2000,
-            chunk_overlap=200
-        )
+        # Split documents
+        splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=2000, chunk_overlap=200)
         final_docs = splitter.split_documents(docs)
 
-        for i in range(0, len(final_docs), 200):
-            astra_vector_store.add_documents(final_docs[i:i+200])
+        # Asynchronously add documents to the vector store in batches
+        batch_size = 20
+        tasks = []
+        for i in range(0, len(final_docs), batch_size):
+            batch = final_docs[i:i + batch_size]
+            tasks.append(astra_vector_store.aadd_documents(batch))
+        
+        await asyncio.gather(*tasks)
+        processed_urls.add(url)
+        print("Document processing and ingestion complete.")
 
-    astra_vector_index = VectorStoreIndexWrapper(vectorstore=astra_vector_store)
-    retriever = astra_vector_store.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 3}, 
-        timeout=20
-    )
-
+    # 2. QUESTION ANSWERING (run concurrently)
     prompt = ChatPromptTemplate.from_template(
         "You are an expert assistant that answers questions about insurance policies with precise, fact-based information. "
         "Only answer based on the given context. Do not make up information. "
@@ -82,21 +90,15 @@ def insurance_answer(url, queries):
         "Question: {input}"
     )
     doc_chain = create_stuff_documents_chain(llm, prompt)
-    final_chain = create_retrieval_chain(retriever, doc_chain)
+    retrieval_chain = create_retrieval_chain(retriever, doc_chain)
 
-    answers = []
-    for query in queries:
-        try:
-            result = final_chain.invoke({"input": query})
+    # Create a list of async tasks for each query
+    answer_tasks = [retrieval_chain.ainvoke({"input": query}) for query in queries]
+    
+    # Execute all queries concurrently
+    results = await asyncio.gather(*answer_tasks)
 
-            # Most likely structure returned
-            if isinstance(result, dict) and "answer" in result:
-                answers.append(result["answer"])
-            else:
-                answers.append(str(result))
-
-        except Exception as e:
-            answers.append(f"An unexpected error occurred: {str(e)}")
-
+    # Extract the answer from each result
+    answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
 
     return answers
