@@ -12,3 +12,4 @@ astrapy
 beautifulsoup4
 pypdf
 python-docx
+unstructured
