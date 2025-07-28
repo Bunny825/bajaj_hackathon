@@ -6,22 +6,27 @@ FROM python:3.11 as builder
 WORKDIR /app
 
 # Install system dependencies required for building Python packages.
-# We add build-essential here for any packages that need to be compiled.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     poppler-utils \
     libmagic-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Create and activate a virtual environment. This is a best practice.
+# Create and activate a virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy only the requirements file to leverage Docker's layer caching
 COPY requirements.txt .
 
-# Install the python dependencies into the virtual environment
-RUN pip install --no-cache-dir -r requirements.txt
+# =================================================================================
+# CRITICAL CHANGE HERE:
+# Install PyTorch with the --index-url flag to get the much smaller CPU version.
+# Then install the rest of your requirements. Pip will see torch is already
+# installed and won't try to download the huge default version.
+# =================================================================================
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt
 
 
 # ---- Final Stage ----
@@ -31,15 +36,13 @@ FROM python:3.11-slim
 # Set the working directory
 WORKDIR /app
 
-# Install only the RUNTIME system dependencies. We don't need build-essential here.
+# Install only the RUNTIME system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libmagic-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the virtual environment from the builder stage.
-# This is the key step that reduces the image size, as it doesn't bring
-# along the build tools and other intermediate files.
+# Copy the virtual environment from the builder stage
 COPY --from=builder /opt/venv /opt/venv
 
 # Copy your application code
