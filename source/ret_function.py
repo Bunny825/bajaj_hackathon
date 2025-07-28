@@ -9,7 +9,10 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_unstructured import UnstructuredFileLoader # Using UnstructuredFileLoader for in-memory processing
+# =================================================================================
+# CORRECTED IMPORT PATH FOR UnstructuredFileLoader
+# =================================================================================
+from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
 
 import cassio
