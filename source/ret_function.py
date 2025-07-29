@@ -13,7 +13,6 @@ from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
 # --- Imports for the Re-ranker ---
 from langchain.retrievers import ContextualCompressionRetriever
-# CORRECTED IMPORT: CohereRerank is now in the langchain_cohere package
 from langchain_cohere import CohereRerank
 
 import cassio
@@ -23,7 +22,6 @@ load_dotenv()
 ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
 ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
 ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
-# IMPORTANT: You will need a Cohere API key for the re-ranker
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 
 cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
@@ -40,12 +38,11 @@ astra_vector_store = Cassandra(
 
 # --- SETUP THE ADVANCED RETRIEVER WITH RE-RANKING ---
 # 1. The base retriever fetches a larger number of initial documents (e.g., 10).
-#    This increases the chance of finding the correct information.
 base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 10})
 
-# 2. The CohereRerank compressor takes these documents and intelligently re-orders them
-#    based on relevance to the query. It will return the top 3.
-compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3)
+# 2. The CohereRerank compressor takes these documents and intelligently re-orders them.
+#    CRITICAL FIX: Added the required 'model' parameter.
+compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
 
 # 3. The final retriever combines these two steps into a single component.
 retriever = ContextualCompressionRetriever(
