@@ -11,6 +11,7 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
+from langchain.retrievers.multi_query import MultiQueryRetriever
 
 import cassio
 
