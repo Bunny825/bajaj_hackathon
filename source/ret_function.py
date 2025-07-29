@@ -11,7 +11,6 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
-from langchain.retrievers.multi_query import MultiQueryRetriever
 
 import cassio
 
@@ -32,10 +31,8 @@ astra_vector_store = Cassandra(
     session=None,
     keyspace=ASTRA_DB_KEYSPACE,
 )
-base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 5})
-retriever = MultiQueryRetriever.from_llm(
-    retriever=base_retriever, llm=llm
-)
+retriever = astra_vector_store.as_retriever(search_kwargs={"k": 5})
+
 # A simple in-memory cache to track processed URLs
 processed_urls = set()
 
