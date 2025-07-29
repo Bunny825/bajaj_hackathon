@@ -13,7 +13,8 @@ from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
 # --- Imports for the Re-ranker ---
 from langchain.retrievers import ContextualCompressionRetriever
-from langchain_community.document_compressors import CohereRerank
+# CORRECTED IMPORT: CohereRerank is now in the langchain_cohere package
+from langchain_cohere import CohereRerank
 
 import cassio
 
