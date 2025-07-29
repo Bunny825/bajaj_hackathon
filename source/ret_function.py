@@ -9,9 +9,6 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-# =================================================================================
-# CORRECTED IMPORT PATH FOR UnstructuredFileLoader
-# =================================================================================
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
 
@@ -34,8 +31,10 @@ astra_vector_store = Cassandra(
     session=None,
     keyspace=ASTRA_DB_KEYSPACE,
 )
-retriever = astra_vector_store.as_retriever(search_kwargs={"k": 3})
-
+base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 5})
+retriever = MultiQueryRetriever.from_llm(
+    retriever=base_retriever, llm=llm
+)
 # A simple in-memory cache to track processed URLs
 processed_urls = set()
 
@@ -85,13 +84,37 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
 
     # 2. QUESTION ANSWERING (run concurrently)
     prompt = ChatPromptTemplate.from_template(
-        "You are an expert assistant that answers questions about insurance policies with precise, fact-based information. "
-        "Only answer based on the given context. Do not make up information. "
-        "Always include exact time periods, percentages, exclusions, and conditions as mentioned in the policy. "
-        "Keep the answer short, formal, and directly addressing the user's question.\n\n"
-        "Context: {context}\n\n"
-        "Question: {input}"
+        """
+        **Persona:** You are a meticulous and precise Insurance Policy Analyst. Your sole function is to answer questions based on the provided policy document context. Your responses must be formal, objective, and strictly factual.
+
+        **Core Task:** Analyze the 'Context' below and provide a clear, factual answer to the user's 'Question'.
+
+        **Critical Rules of Engagement:**
+
+        1.  **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge, make assumptions, or infer information not explicitly stated.
+
+        2.  **Handle Missing Information:** If the context does not contain the information needed to answer the question, you MUST respond with the exact phrase: "The information required to answer this question is not available in the provided document context." Do not apologize or try to find a related answer.
+
+        3.  **Precision and Detail:** When the answer is available, you must include all relevant, specific details such as numbers, percentages, time periods (e.g., 30 days, 24 months), and named conditions or clauses mentioned in the context.
+
+        4.  **Concise and Direct Output:**
+            * Provide a direct answer to the question. Avoid unnecessary introductory phrases like "According to the policy..." or "The context states that...".
+            * The answer should be a single, well-formed paragraph.
+            * Do not add concluding summaries or elaborate on topics not directly asked about. The goal is a complete but not verbose response.
+
+        5.  **Interpret Ambiguous Queries:** If a user's question is vague or incomplete (e.g., "what about surgery?"), interpret it logically based on the most significant and relevant information in the context. Your answer should clarify the aspect you are addressing (e.g., "Regarding coverage for planned surgeries, the policy states...").
+
+        ---
+        **Context:**
+        {context}
+        ---
+        **Question:**
+        {input}
+        ---
+        **Answer:**
+        """
     )
+
     doc_chain = create_stuff_documents_chain(llm, prompt)
     retrieval_chain = create_retrieval_chain(retriever, doc_chain)
 
