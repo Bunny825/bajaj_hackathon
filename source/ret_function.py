@@ -39,7 +39,7 @@ astra_vector_store = Cassandra(
 # --- SETUP THE ADVANCED RETRIEVER WITH RE-RANKING ---
 # 1. The base retriever now fetches a much larger number of initial documents (k=20).
 #    This "casts a wider net" to increase the chances of finding the right context.
-base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 20})
+base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 10})
 
 # 2. The CohereRerank compressor takes these 20 documents and intelligently finds the top 3.
 compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
