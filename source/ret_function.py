@@ -37,8 +37,14 @@ astra_vector_store = Cassandra(
 )
 
 # --- SETUP THE ADVANCED RETRIEVER WITH RE-RANKING ---
-base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 10})
+# 1. The base retriever now fetches a much larger number of initial documents (k=20).
+#    This "casts a wider net" to increase the chances of finding the right context.
+base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 20})
+
+# 2. The CohereRerank compressor takes these 20 documents and intelligently finds the top 3.
 compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
+
+# 3. The final retriever combines these two steps into a single component.
 retriever = ContextualCompressionRetriever(
     base_compressor=compressor, base_retriever=base_retriever
 )
@@ -46,22 +52,11 @@ retriever = ContextualCompressionRetriever(
 # A simple in-memory cache to track processed URLs
 processed_urls = set()
 
-# --- 1. QUERY TRANSFORMATION (To improve accuracy) ---
-# This prompt asks the LLM to rewrite the user's question into a more
-# precise query that is more likely to match the document's language.
-query_transform_prompt = ChatPromptTemplate.from_template(
-    "You are an expert at rewriting user questions into precise search queries for a vector database. "
-    "Based on the user's question about an insurance policy, generate a new query that is optimized for semantic search. "
-    "Focus on using keywords and phrases that would likely appear in a formal policy document, such as 'coverage limitations', 'exclusion clauses', 'waiting periods', 'co-payment responsibilities', etc. "
-    "User Question: {question}"
-)
-query_transformer = query_transform_prompt | llm
-
 # --- Core Asynchronous Function ---
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     """
     Asynchronously processes a document and answers questions about it with
-    query transformation and controlled concurrency.
+    a robust re-ranking retriever and controlled concurrency.
     """
     global processed_urls
 
@@ -69,7 +64,6 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     if url not in processed_urls:
         print(f"New document URL received: {url}. Processing...")
         await astra_vector_store.aclear()
-        # ... (rest of your data ingestion code is perfect, no changes needed)
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
@@ -87,7 +81,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         processed_urls.add(url)
         print("Document processing and ingestion complete.")
 
-    # 2. QUESTION ANSWERING PIPELINE
+    # QUESTION ANSWERING PIPELINE
     qa_prompt = ChatPromptTemplate.from_template(
         """
         **Persona:** You are a meticulous and precise Insurance Policy Analyst. Your sole function is to answer questions based on the provided policy document context. Your responses must be formal, objective, and strictly factual.
@@ -95,11 +89,13 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         **Core Task:** Analyze the 'Context' below and provide a clear, factual answer to the user's 'Question'.
 
         **Critical Rules of Engagement:**
-        1. **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge, make assumptions, or infer information not explicitly stated.
-        2. **Handle Missing Information:** If the context does not contain the information needed to answer the question, you MUST respond with the exact phrase: "The information required to answer this question is not available in the provided document context." Do not apologize or try to find a related answer.
-        3. **Precision and Detail:** When the answer is available, you must include all relevant, specific details such as numbers, percentages, time periods (e.g., 30 days, 24 months), and named conditions or clauses mentioned in the context.
-        4. **Concise and Direct Output:** Provide a direct answer to the question. Avoid unnecessary introductory phrases. The answer should be a single, well-formed paragraph. Do not add concluding summaries or elaborate on topics not directly asked about.
-        5. **Interpret Ambiguous Queries:** If a user's question is vague or incomplete, interpret it logically based on the most significant and relevant information in the context. Your answer should clarify the aspect you are addressing.
+        1.  **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge or make assumptions not explicitly stated.
+
+        2.  **Best-Effort Answering:** If the context does not contain a perfect, direct answer, you must still attempt to provide the most relevant information available. If you are providing an answer that is related but not a direct answer, you can state that. If no relevant information exists at all, then you may state that the information could not be found.
+
+        3.  **Precision and Detail:** When the answer is available, you must include all relevant, specific details such as numbers, percentages, time periods (e.g., 30 days, 24 months), and named conditions or clauses mentioned in the context.
+
+        4.  **Concise and Direct Output:** Provide a direct answer to the question. Avoid unnecessary introductory phrases. The answer should be a single, well-formed paragraph. Do not add concluding summaries or elaborate on topics not directly asked about.
 
         ---
         **Context:**
@@ -114,34 +110,15 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     doc_chain = create_stuff_documents_chain(llm, qa_prompt)
     retrieval_chain = create_retrieval_chain(retriever, doc_chain)
     
-    # --- 3. CONTROLLED CONCURRENCY (To handle rate limits) ---
-    # We process the queries in small batches to avoid hitting the API rate limit.
+    # CONTROLLED CONCURRENCY (To handle rate limits)
     final_answers = []
-    batch_size = 5 # Process 5 queries at a time (safely below the 10/min limit)
+    batch_size = 5 # Process 5 queries at a time
     
     for i in range(0, len(queries), batch_size):
         batch_queries = queries[i:i + batch_size]
-        
-        # Create a list of tasks for the current batch
-        batch_tasks = []
-        for query in batch_queries:
-            # First, transform the query
-            transformed_query_result = await query_transformer.ainvoke({"question": query})
-            transformed_query = transformed_query_result.content
-            print(f"Original Query: '{query}' -> Transformed Query: '{transformed_query}'")
-            
-            # Then, create the task for the full QA chain with the transformed query
-            task = retrieval_chain.ainvoke({"input": transformed_query})
-            batch_tasks.append(task)
-        
-        # Execute the current batch of tasks concurrently
+        batch_tasks = [retrieval_chain.ainvoke({"input": query}) for query in batch_queries]
         results = await asyncio.gather(*batch_tasks)
-        
-        # Extract and store the answers
         answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
         final_answers.extend(answers)
         
-        # Optional: Add a small delay between batches if needed, though batching is usually sufficient
-        # await asyncio.sleep(1) 
-
     return final_answers
