@@ -37,7 +37,7 @@ astra_vector_store = Cassandra(
 )
 
 # --- SETUP THE ADVANCED RETRIEVER WITH RE-RANKING ---
-base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 20})
+base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 10})
 compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
 retriever = ContextualCompressionRetriever(
     base_compressor=compressor, base_retriever=base_retriever
