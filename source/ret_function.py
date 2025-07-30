@@ -79,6 +79,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     qa_prompt = ChatPromptTemplate.from_template(
         """
         **Persona:** You are a meticulous and precise Insurance Policy Analyst. Your sole function is to answer questions based on the provided policy document context. Your responses must be formal, objective, and strictly factual.
+
         **Core Task:** Analyze the 'Context' below and provide a clear, factual answer to the user's 'Question'.
 
         **Critical Rules of Engagement:**
@@ -111,10 +112,9 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         final_answers.extend(answers)
 
         # --- CRITICAL FIX FOR RATE LIMIT ---
-        # Add a delay after processing each batch to respect the 10 calls/minute limit.
-        # We check if it's not the last batch to avoid unnecessary waiting at the very end.
+        # Add a shorter delay to stay under the 10 calls/minute limit without timing out.
         if i + batch_size < len(queries):
-            print(f"Batch complete. Waiting for 6 seconds to respect rate limit...")
-            await asyncio.sleep(1)
+            print(f"Batch complete. Waiting for 2 seconds to respect rate limit...")
+            await asyncio.sleep(2)
         
     return final_answers
