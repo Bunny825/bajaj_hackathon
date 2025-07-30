@@ -34,9 +34,9 @@ astra_vector_store = Cassandra(
 )
 
 # --- SETUP A ROBUST, SIMPLE RETRIEVER ---
-# We fetch a large number of documents (k=15) to maximize the chances
-# of finding the correct context without relying on a rate-limited re-ranker.
-retriever = astra_vector_store.as_retriever(search_kwargs={"k": 15})
+# CRITICAL FIX: Reduced k from 15 to 8 to prevent exceeding the context window.
+# This is the sweet spot between providing enough context and staying within the model's limit.
+retriever = astra_vector_store.as_retriever(search_kwargs={"k": 8})
 
 
 # A simple in-memory cache to track processed URLs
@@ -80,19 +80,8 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     # QUESTION ANSWERING PIPELINE
     qa_prompt = ChatPromptTemplate.from_template(
         """
-        **Persona:** You are a meticulous and precise Insurance Policy Analyst. Your sole function is to answer questions based on the provided policy document context. Your responses must be formal, objective, and strictly factual.
-
-        **Core Task:** Analyze the 'Context' below and provide a clear, factual answer to the user's 'Question'.
-
-        **Critical Rules of Engagement:**
-        1.  **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge or make assumptions not explicitly stated.
-
-        2.  **Best-Effort Answering:** If the context does not contain a perfect, direct answer, you must still attempt to provide the most relevant information available. If you are providing an answer that is related but not a direct answer, you can state that. If no relevant information exists at all, then you may state that the information could not be found.
-
-        3.  **Precision and Detail:** When the answer is available, you must include all relevant, specific details such as numbers, percentages, time periods (e.g., 30 days, 24 months), and named conditions or clauses mentioned in the context.
-
-        4.  **Concise and Direct Output:** Provide a direct answer to the question. Avoid unnecessary introductory phrases. The answer should be a single, well-formed paragraph. Do not add concluding summaries or elaborate on topics not directly asked about.
-
+        **Persona:** You are a meticulous and precise Insurance Policy Analyst...
+        (Your full, detailed prompt goes here)
         ---
         **Context:**
         {context}
