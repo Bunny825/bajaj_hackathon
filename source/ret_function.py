@@ -11,9 +11,6 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
-# --- Imports for the Re-ranker ---
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain_cohere import CohereRerank
 
 import cassio
 
@@ -22,7 +19,7 @@ load_dotenv()
 ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
 ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
 ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
-COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+# COHERE_API_KEY is no longer needed
 
 cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
@@ -36,12 +33,11 @@ astra_vector_store = Cassandra(
     keyspace=ASTRA_DB_KEYSPACE,
 )
 
-# --- SETUP THE ADVANCED RETRIEVER WITH RE-RANKING ---
-base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 10})
-compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
-retriever = ContextualCompressionRetriever(
-    base_compressor=compressor, base_retriever=base_retriever
-)
+# --- SETUP A ROBUST, SIMPLE RETRIEVER ---
+# We fetch a large number of documents (k=15) to maximize the chances
+# of finding the correct context without relying on a rate-limited re-ranker.
+retriever = astra_vector_store.as_retriever(search_kwargs={"k": 15})
+
 
 # A simple in-memory cache to track processed URLs
 processed_urls = set()
@@ -50,7 +46,7 @@ processed_urls = set()
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     """
     Asynchronously processes a document and answers questions about it with
-    a robust re-ranking retriever and controlled concurrency.
+    a robust retriever and maximum concurrency.
     """
     global processed_urls
 
@@ -67,8 +63,14 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         loader = UnstructuredFileLoader(file_path)
         docs = await loader.aload()
         os.remove(file_path)
+        
+        if not docs:
+            print("ERROR: UnstructuredFileLoader returned no documents.")
+            raise ValueError("Failed to load or parse the document content.")
+
         splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=2000, chunk_overlap=200)
         final_docs = splitter.split_documents(docs)
+        
         batch_size = 20
         tasks = [astra_vector_store.aadd_documents(final_docs[i:i + batch_size]) for i in range(0, len(final_docs), batch_size)]
         await asyncio.gather(*tasks)
@@ -84,9 +86,13 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
 
         **Critical Rules of Engagement:**
         1.  **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge or make assumptions not explicitly stated.
+
         2.  **Best-Effort Answering:** If the context does not contain a perfect, direct answer, you must still attempt to provide the most relevant information available. If you are providing an answer that is related but not a direct answer, you can state that. If no relevant information exists at all, then you may state that the information could not be found.
+
         3.  **Precision and Detail:** When the answer is available, you must include all relevant, specific details such as numbers, percentages, time periods (e.g., 30 days, 24 months), and named conditions or clauses mentioned in the context.
+
         4.  **Concise and Direct Output:** Provide a direct answer to the question. Avoid unnecessary introductory phrases. The answer should be a single, well-formed paragraph. Do not add concluding summaries or elaborate on topics not directly asked about.
+
         ---
         **Context:**
         {context}
@@ -100,21 +106,9 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     doc_chain = create_stuff_documents_chain(llm, qa_prompt)
     retrieval_chain = create_retrieval_chain(retriever, doc_chain)
     
-    # CONTROLLED CONCURRENCY (To handle rate limits)
-    final_answers = []
-    batch_size = 5 # Process 5 queries at a time
-    
-    for i in range(0, len(queries), batch_size):
-        batch_queries = queries[i:i + batch_size]
-        batch_tasks = [retrieval_chain.ainvoke({"input": query}) for query in batch_queries]
-        results = await asyncio.gather(*batch_tasks)
-        answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
-        final_answers.extend(answers)
-
-        # --- CRITICAL FIX FOR RATE LIMIT ---
-        # Add a shorter delay to stay under the 10 calls/minute limit without timing out.
-        if i + batch_size < len(queries):
-            print(f"Batch complete. Waiting for 2 seconds to respect rate limit...")
-            await asyncio.sleep(2)
+    # Process all queries at maximum speed
+    tasks = [retrieval_chain.ainvoke({"input": query}) for query in queries]
+    results = await asyncio.gather(*tasks)
+    answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
         
-    return final_answers
+    return answers
