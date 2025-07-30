@@ -34,8 +34,7 @@ astra_vector_store = Cassandra(
 )
 
 # --- SETUP A ROBUST, SIMPLE RETRIEVER ---
-# CRITICAL FIX: Reduced k from 15 to 8 to prevent exceeding the context window.
-# This is the sweet spot between providing enough context and staying within the model's limit.
+# k=8 is a safe balance between providing enough context and staying within the model's limit.
 retriever = astra_vector_store.as_retriever(search_kwargs={"k": 8})
 
 
@@ -46,7 +45,7 @@ processed_urls = set()
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     """
     Asynchronously processes a document and answers questions about it with
-    a robust retriever and maximum concurrency.
+    a robust retriever and controlled concurrency.
     """
     global processed_urls
 
@@ -80,8 +79,19 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     # QUESTION ANSWERING PIPELINE
     qa_prompt = ChatPromptTemplate.from_template(
         """
-        **Persona:** You are a meticulous and precise Insurance Policy Analyst...
-        (Your full, detailed prompt goes here)
+        **Persona:** You are a meticulous and precise Insurance Policy Analyst. Your sole function is to answer questions based on the provided policy document context. Your responses must be formal, objective, and strictly factual.
+
+        **Core Task:** Analyze the 'Context' below and provide a clear, factual answer to the user's 'Question'.
+
+        **Critical Rules of Engagement:**
+        1.  **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge or make assumptions not explicitly stated.
+
+        2.  **Best-Effort Answering:** If the context does not contain a perfect, direct answer, you must still attempt to provide the most relevant information available. If you are providing an answer that is related but not a direct answer, you can state that. If no relevant information exists at all, then you may state that the information could not be found.
+
+        3.  **Precision and Detail:** When the answer is available, you must include all relevant, specific details such as numbers, percentages, time periods (e.g., 30 days, 24 months), and named conditions or clauses mentioned in the context.
+
+        4.  **Concise and Direct Output:** Provide a direct answer to the question. Avoid unnecessary introductory phrases. The answer should be a single, well-formed paragraph. Do not add concluding summaries or elaborate on topics not directly asked about.
+
         ---
         **Context:**
         {context}
@@ -95,9 +105,21 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     doc_chain = create_stuff_documents_chain(llm, qa_prompt)
     retrieval_chain = create_retrieval_chain(retriever, doc_chain)
     
-    # Process all queries at maximum speed
-    tasks = [retrieval_chain.ainvoke({"input": query}) for query in queries]
-    results = await asyncio.gather(*tasks)
-    answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
+    # --- CONTROLLED CONCURRENCY (To handle ALL rate limits) ---
+    final_answers = []
+    # Process in small batches to avoid overwhelming the OpenAI TPM limit.
+    batch_size = 3
+    
+    for i in range(0, len(queries), batch_size):
+        batch_queries = queries[i:i + batch_size]
+        batch_tasks = [retrieval_chain.ainvoke({"input": query}) for query in batch_queries]
+        results = await asyncio.gather(*batch_tasks)
+        answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
+        final_answers.extend(answers)
+
+        # Add a small delay between batches to respect time-based rate limits (e.g., per minute)
+        if i + batch_size < len(queries):
+            print(f"Batch complete. Waiting for 1 second to respect rate limit...")
+            await asyncio.sleep(1)
         
-    return answers
+    return final_answers
