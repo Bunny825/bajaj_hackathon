@@ -21,7 +21,6 @@ load_dotenv()
 ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
 ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
 ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
-# COHERE_API_KEY is no longer needed
 
 cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
@@ -35,20 +34,20 @@ astra_vector_store = Cassandra(
     keyspace=ASTRA_DB_KEYSPACE,
 )
 
-# A simple in-memory cache to track processed URLs and document chunks
-processed_docs_cache = {}
+# A simple in-memory cache to store the fully initialized retriever for each document
+retriever_cache = {}
 
 # --- Core Asynchronous Function ---
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     """
     Asynchronously processes a document and answers questions about it with
-    a robust hybrid search retriever and controlled concurrency.
+    a robust, cached hybrid search retriever.
     """
-    global processed_docs_cache
+    global retriever_cache
 
-    # DATA INGESTION and RETRIEVER SETUP (only if document is new)
-    if url not in processed_docs_cache:
-        print(f"New document URL received: {url}. Processing...")
+    # --- CRITICAL FIX: Check if we have already built a retriever for this URL ---
+    if url not in retriever_cache:
+        print(f"New document URL received: {url}. Building retriever...")
         await astra_vector_store.aclear()
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
@@ -61,36 +60,30 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         os.remove(file_path)
         
         if not docs:
-            print("ERROR: UnstructuredFileLoader returned no documents.")
             raise ValueError("Failed to load or parse the document content.")
 
         splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=2000, chunk_overlap=200)
         final_docs = splitter.split_documents(docs)
         
-        # Store the processed chunks in our cache for this URL
-        processed_docs_cache[url] = final_docs
-        
+        # Add documents to the vector store
         batch_size = 20
         tasks = [astra_vector_store.aadd_documents(final_docs[i:i + batch_size]) for i in range(0, len(final_docs), batch_size)]
         await asyncio.gather(*tasks)
-        print("Document processing and ingestion complete.")
+        
+        # --- BUILD THE HYBRID RETRIEVER ONCE ---
+        bm25_retriever = BM25Retriever.from_documents(final_docs)
+        bm25_retriever.k = 4
+        vector_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 4})
+        ensemble_retriever = EnsembleRetriever(
+            retrievers=[bm25_retriever, vector_retriever], weights=[0.5, 0.5]
+        )
+        
+        # Store the fully-built retriever in the cache
+        retriever_cache[url] = ensemble_retriever
+        print("Retriever for this document has been built and cached.")
 
-    # --- SETUP THE HYBRID (ENSEMBLE) RETRIEVER ---
-    # 1. Get the document chunks for the current URL from the cache
-    doc_chunks = processed_docs_cache[url]
-
-    # 2. Initialize the keyword retriever (BM25) with the document chunks
-    bm25_retriever = BM25Retriever.from_documents(doc_chunks)
-    bm25_retriever.k = 5 # Retrieve top 5 keyword matches
-
-    # 3. Initialize the vector retriever (semantic)
-    vector_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 5}) # Retrieve top 5 semantic matches
-
-    # 4. Initialize the EnsembleRetriever to combine both methods
-    # The weights determine how much influence each retriever has. We'll balance them.
-    ensemble_retriever = EnsembleRetriever(
-        retrievers=[bm25_retriever, vector_retriever], weights=[0.5, 0.5]
-    )
+    # Retrieve the ready-to-use retriever from the cache
+    retriever = retriever_cache[url]
 
     # QUESTION ANSWERING PIPELINE
     qa_prompt = ChatPromptTemplate.from_template(
@@ -119,7 +112,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         """
     )
     doc_chain = create_stuff_documents_chain(llm, qa_prompt)
-    retrieval_chain = create_retrieval_chain(ensemble_retriever, doc_chain)
+    retrieval_chain = create_retrieval_chain(retriever, doc_chain)
     
     # CONTROLLED CONCURRENCY (To handle OpenAI's rate limits)
     final_answers = []
