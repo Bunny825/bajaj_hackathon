@@ -119,7 +119,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         """
     )
     doc_chain = create_stuff_documents_chain(llm, qa_prompt)
-    retrieval_chain = create_retrieval_chain(ensemble_ retriever, doc_chain)
+    retrieval_chain = create_retrieval_chain(ensemble_retriever, doc_chain)
     
     # CONTROLLED CONCURRENCY (To handle OpenAI's rate limits)
     final_answers = []
