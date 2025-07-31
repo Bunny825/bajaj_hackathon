@@ -38,6 +38,7 @@ astra_vector_store = Cassandra(
 
 # --- SETUP THE ADVANCED RETRIEVER WITH RE-RANKING ---
 # 1. The base retriever fetches a larger number of initial documents (k=20).
+#    This "casts a wider net" to increase the chances of finding the right context.
 base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 20})
 
 # 2. The CohereRerank compressor takes these 20 documents and intelligently finds the top 3.
@@ -118,7 +119,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     # CONTROLLED CONCURRENCY (To handle ALL rate limits)
     final_answers = []
     # Process in small batches to avoid overwhelming API rate limits.
-    batch_size = 3
+    batch_size = 5
     
     for i in range(0, len(queries), batch_size):
         batch_queries = queries[i:i + batch_size]
@@ -127,7 +128,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
         final_answers.extend(answers)
 
-        # Add a small delay between batches to respect time-based rate limits (e.g., per minute)
+        # Add a small delay between batches to respect time-based rate limits
         if i + batch_size < len(queries):
             print(f"Batch complete. Waiting for 2 seconds to respect rate limits...")
             await asyncio.sleep(2)
