@@ -1,6 +1,6 @@
 import os
 import asyncio
-import httpx # Using httpx for async requests
+import httpx 
 from uuid import uuid4
 from dotenv import load_dotenv
 from langchain_core.documents import Document
@@ -11,6 +11,9 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
+# --- Imports for the Re-ranker ---
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain_cohere import CohereRerank
 
 import cassio
 
@@ -19,7 +22,7 @@ load_dotenv()
 ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
 ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
 ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
-# COHERE_API_KEY is no longer needed
+COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 
 cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
@@ -33,10 +36,17 @@ astra_vector_store = Cassandra(
     keyspace=ASTRA_DB_KEYSPACE,
 )
 
-# --- SETUP A ROBUST, SIMPLE RETRIEVER ---
-# k=8 is a safe balance between providing enough context and staying within the model's limit.
-retriever = astra_vector_store.as_retriever(search_kwargs={"k": 8})
+# --- SETUP THE ADVANCED RETRIEVER WITH RE-RANKING ---
+# 1. The base retriever fetches a larger number of initial documents (k=20).
+base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 20})
 
+# 2. The CohereRerank compressor takes these 20 documents and intelligently finds the top 3.
+compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
+
+# 3. The final retriever combines these two steps into a single component.
+retriever = ContextualCompressionRetriever(
+    base_compressor=compressor, base_retriever=base_retriever
+)
 
 # A simple in-memory cache to track processed URLs
 processed_urls = set()
@@ -45,7 +55,7 @@ processed_urls = set()
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     """
     Asynchronously processes a document and answers questions about it with
-    a robust retriever and controlled concurrency.
+    a robust re-ranking retriever and controlled concurrency.
     """
     global processed_urls
 
@@ -105,9 +115,9 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     doc_chain = create_stuff_documents_chain(llm, qa_prompt)
     retrieval_chain = create_retrieval_chain(retriever, doc_chain)
     
-    # --- CONTROLLED CONCURRENCY (To handle ALL rate limits) ---
+    # CONTROLLED CONCURRENCY (To handle ALL rate limits)
     final_answers = []
-    # Process in small batches to avoid overwhelming the OpenAI TPM limit.
+    # Process in small batches to avoid overwhelming API rate limits.
     batch_size = 3
     
     for i in range(0, len(queries), batch_size):
@@ -119,7 +129,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
 
         # Add a small delay between batches to respect time-based rate limits (e.g., per minute)
         if i + batch_size < len(queries):
-            print(f"Batch complete. Waiting for 1 second to respect rate limit...")
-            await asyncio.sleep(1)
+            print(f"Batch complete. Waiting for 2 seconds to respect rate limits...")
+            await asyncio.sleep(2)
         
     return final_answers
