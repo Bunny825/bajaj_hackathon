@@ -48,7 +48,10 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     # --- CRITICAL FIX: Check if we have already built a retriever for this URL ---
     if url not in retriever_cache:
         print(f"New document URL received: {url}. Building retriever...")
+        # 1. Clear the remote vector store to ensure no data leakage
         await astra_vector_store.aclear()
+        
+        # 2. Download and process the new document
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
@@ -65,20 +68,25 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=2000, chunk_overlap=200)
         final_docs = splitter.split_documents(docs)
         
-        # Add documents to the vector store
+        # 3. Add the new documents to the now-empty vector store
         batch_size = 20
         tasks = [astra_vector_store.aadd_documents(final_docs[i:i + batch_size]) for i in range(0, len(final_docs), batch_size)]
         await asyncio.gather(*tasks)
         
         # --- BUILD THE HYBRID RETRIEVER ONCE ---
+        # 4. Create the keyword retriever from the new document's chunks
         bm25_retriever = BM25Retriever.from_documents(final_docs)
         bm25_retriever.k = 4
+        
+        # 5. Create the vector retriever (which now correctly points to the new data)
         vector_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 4})
+        
+        # 6. Combine them into the final ensemble retriever
         ensemble_retriever = EnsembleRetriever(
             retrievers=[bm25_retriever, vector_retriever], weights=[0.5, 0.5]
         )
         
-        # Store the fully-built retriever in the cache
+        # 7. Store the fully-built retriever in the cache
         retriever_cache[url] = ensemble_retriever
         print("Retriever for this document has been built and cached.")
 
