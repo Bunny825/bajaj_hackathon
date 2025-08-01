@@ -34,64 +34,53 @@ astra_vector_store = Cassandra(
     keyspace=ASTRA_DB_KEYSPACE,
 )
 
-# A simple in-memory cache to store the fully initialized retriever for each document
-retriever_cache = {}
-
 # --- Core Asynchronous Function ---
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     """
     Asynchronously processes a document and answers questions about it with
-    a robust, cached hybrid search retriever.
+    a fresh, non-cached hybrid search retriever to guarantee data isolation.
     """
-    global retriever_cache
+    # --- DATA INGESTION AND RETRIEVER SETUP ON EVERY CALL ---
+    # This is the only way to be 100% sure there is no data leakage.
+    print(f"Processing document: {url}. Building fresh retriever...")
+    
+    # 1. Clear the remote vector store to ensure no data leakage from previous runs
+    await astra_vector_store.aclear()
+    
+    # 2. Download and process the new document
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, timeout=30.0)
+        response.raise_for_status()
+        pdf_content = response.content
+    file_path = f"/tmp/{uuid4()}.pdf"
+    with open(file_path, "wb") as f: f.write(pdf_content)
+    loader = UnstructuredFileLoader(file_path)
+    docs = await loader.aload()
+    os.remove(file_path)
+    
+    if not docs:
+        raise ValueError("Failed to load or parse the document content.")
 
-    # --- CRITICAL FIX: Check if we have already built a retriever for this URL ---
-    if url not in retriever_cache:
-        print(f"New document URL received: {url}. Building retriever...")
-        # 1. Clear the remote vector store to ensure no data leakage
-        await astra_vector_store.aclear()
-        
-        # 2. Download and process the new document
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
-            response.raise_for_status()
-            pdf_content = response.content
-        file_path = f"/tmp/{uuid4()}.pdf"
-        with open(file_path, "wb") as f: f.write(pdf_content)
-        loader = UnstructuredFileLoader(file_path)
-        docs = await loader.aload()
-        os.remove(file_path)
-        
-        if not docs:
-            raise ValueError("Failed to load or parse the document content.")
-
-        splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=2000, chunk_overlap=200)
-        final_docs = splitter.split_documents(docs)
-        
-        # 3. Add the new documents to the now-empty vector store
-        batch_size = 20
-        tasks = [astra_vector_store.aadd_documents(final_docs[i:i + batch_size]) for i in range(0, len(final_docs), batch_size)]
-        await asyncio.gather(*tasks)
-        
-        # --- BUILD THE HYBRID RETRIEVER ONCE ---
-        # 4. Create the keyword retriever from the new document's chunks
-        bm25_retriever = BM25Retriever.from_documents(final_docs)
-        bm25_retriever.k = 4
-        
-        # 5. Create the vector retriever (which now correctly points to the new data)
-        vector_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 4})
-        
-        # 6. Combine them into the final ensemble retriever
-        ensemble_retriever = EnsembleRetriever(
-            retrievers=[bm25_retriever, vector_retriever], weights=[0.5, 0.5]
-        )
-        
-        # 7. Store the fully-built retriever in the cache
-        retriever_cache[url] = ensemble_retriever
-        print("Retriever for this document has been built and cached.")
-
-    # Retrieve the ready-to-use retriever from the cache
-    retriever = retriever_cache[url]
+    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=2000, chunk_overlap=200)
+    final_docs = splitter.split_documents(docs)
+    
+    # 3. Add the new documents to the now-empty vector store
+    await astra_vector_store.aadd_documents(final_docs)
+    
+    # --- BUILD THE HYBRID RETRIEVER FROM SCRATCH ---
+    # 4. Create the keyword retriever from the new document's chunks
+    bm25_retriever = BM25Retriever.from_documents(final_docs)
+    bm25_retriever.k = 4
+    
+    # 5. Create the vector retriever (which now correctly points to the new data)
+    vector_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 4})
+    
+    # 6. Combine them into the final ensemble retriever
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, vector_retriever], weights=[0.5, 0.5]
+    )
+    
+    print("Fresh retriever has been built.")
 
     # QUESTION ANSWERING PIPELINE
     qa_prompt = ChatPromptTemplate.from_template(
@@ -101,7 +90,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         **Core Task:** Analyze the 'Context' below and provide a clear, factual answer to the user's 'Question'.
 
         **Critical Rules of Engagement:**
-        1.  **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge, make assumptions, or infer information not explicitly stated.
+        1.  **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge or make assumptions not explicitly stated.
 
         2.  **Best-Effort Answering:** If the context does not contain a perfect, direct answer, you must still attempt to provide the most relevant information available. If you are providing an answer that is related but not a direct answer, you can state that. If no relevant information exists at all, then you may state that the information could not be found.
 
@@ -120,7 +109,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         """
     )
     doc_chain = create_stuff_documents_chain(llm, qa_prompt)
-    retrieval_chain = create_retrieval_chain(retriever, doc_chain)
+    retrieval_chain = create_retrieval_chain(ensemble_retriever, doc_chain)
     
     # CONTROLLED CONCURRENCY (To handle OpenAI's rate limits)
     final_answers = []
