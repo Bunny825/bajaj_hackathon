@@ -12,8 +12,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
 # --- Imports for Hybrid Search ---
-from langchain.retrievers import BM25Retriever, EnsembleRetriever
-
+from langchain.retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
 import cassio
 
 # --- Initialization (runs only once on startup) ---
