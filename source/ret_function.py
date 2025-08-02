@@ -11,8 +11,9 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
-# --- Imports for Hybrid Search ---
-from langchain.retrievers import BM25Retriever, EnsembleRetriever
+# --- Imports for the Parent Document Retriever ---
+from langchain.retrievers import ParentDocumentRetriever
+from langchain.storage import InMemoryStore
 
 import cassio
 
@@ -21,13 +22,14 @@ load_dotenv()
 ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
 ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
 ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
+# COHERE_API_KEY is no longer needed
 
 cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
-# --- Reverted to OpenAI as requested ---
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+
 astra_vector_store = Cassandra(
     embedding=embeddings,
     table_name="bajaj_insurance_policy_prod",
@@ -41,18 +43,16 @@ retriever_cache = {}
 # --- Core Asynchronous Function ---
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     """
-    Asynchronously processes a document and answers questions about it with
-    a robust, cached hybrid search retriever to ensure speed and accuracy.
+    Asynchronously processes a document and answers questions with a Parent Document
+    Retriever to ensure accuracy and full context.
     """
     global retriever_cache
 
-    # --- CRITICAL FIX: Check if we have already built a retriever for this URL ---
+    # Build the retriever once per document and cache it for speed
     if url not in retriever_cache:
-        print(f"New document URL received: {url}. Building retriever for the first time...")
-        # 1. Clear the remote vector store to ensure no data leakage
+        print(f"New document URL received: {url}. Building Parent Document Retriever...")
         await astra_vector_store.aclear()
         
-        # 2. Download and process the new document
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
@@ -66,27 +66,31 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         if not docs:
             raise ValueError("Failed to load or parse the document content.")
 
-        splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=2000, chunk_overlap=200)
-        final_docs = splitter.split_documents(docs)
+        # --- SETUP FOR PARENT DOCUMENT RETRIEVER ---
+        # 1. This splitter creates the large "parent" documents
+        parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
         
-        # 3. Add the new documents to the now-empty vector store
-        await astra_vector_store.aadd_documents(final_docs)
+        # 2. This splitter creates the small, precise "child" documents
+        child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=100)
         
-        # --- BUILD THE HYBRID RETRIEVER ONCE ---
-        # 4. Create the keyword retriever from the new document's chunks
-        bm25_retriever = BM25Retriever.from_documents(final_docs)
-        bm25_retriever.k = 4
+        # 3. The docstore stores the parent documents in memory
+        store = InMemoryStore()
         
-        # 5. Create the vector retriever (which now correctly points to the new data)
-        vector_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 4})
-        
-        # 6. Combine them into the final ensemble retriever
-        ensemble_retriever = EnsembleRetriever(
-            retrievers=[bm25_retriever, vector_retriever], weights=[0.5, 0.5]
+        # 4. Initialize the ParentDocumentRetriever
+        retriever = ParentDocumentRetriever(
+            vectorstore=astra_vector_store,
+            docstore=store,
+            child_splitter=child_splitter,
+            parent_splitter=parent_splitter,
         )
         
-        # 7. Store the fully-built retriever in the cache
-        retriever_cache[url] = ensemble_retriever
+        # 5. Add the documents. The retriever handles the splitting, embedding, and storing.
+        # This is a synchronous operation in LangChain currently, so we run it in an executor.
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, retriever.add_documents, docs)
+        
+        # 6. Store the fully-built retriever in the cache
+        retriever_cache[url] = retriever
         print("Retriever for this document has been built and cached.")
 
     # Retrieve the ready-to-use, fast retriever from the cache
@@ -100,7 +104,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         **Core Task:** Analyze the 'Context' below and provide a clear, factual answer to the user's 'Question'.
 
         **Critical Rules of Engagement:**
-        1.  **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge, make assumptions, or infer information not explicitly stated.
+        1.  **Strictly Grounded in Context:** Your answer MUST be derived exclusively from the text within the 'Context' section. Do not use any external knowledge, make assumptions, not explicitly stated.
 
         2.  **Best-Effort Answering:** If the context does not contain a perfect, direct answer, you must still attempt to provide the most relevant information available. If you are providing an answer that is related but not a direct answer, you can state that. If no relevant information exists at all, then you may state that the information could not be found.
 
@@ -123,7 +127,6 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     
     # --- CONTROLLED CONCURRENCY (To handle OpenAI's rate limits) ---
     final_answers = []
-    # Process in small batches to avoid overwhelming the OpenAI TPM limit.
     batch_size = 3
     
     for i in range(0, len(queries), batch_size):
