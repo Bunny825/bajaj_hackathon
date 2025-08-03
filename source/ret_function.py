@@ -11,9 +11,7 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
-# --- Imports for Hybrid Search ---
-from langchain.retrievers import EnsembleRetriever
-from langchain_community.retrievers import BM25Retriever
+
 import cassio
 
 # --- Initialization (runs only once on startup) ---
@@ -26,7 +24,9 @@ cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
-llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+# --- CRITICAL UPGRADE: Use gpt-4o for superior reasoning ---
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
 astra_vector_store = Cassandra(
     embedding=embeddings,
     table_name="bajaj_insurance_policy_prod",
@@ -34,26 +34,27 @@ astra_vector_store = Cassandra(
     keyspace=ASTRA_DB_KEYSPACE,
 )
 
-# A simple in-memory cache to store the fully initialized retriever for each document
-retriever_cache = {}
+# A simple in-memory cache to track which URLs have been processed
+processed_urls = set()
 
 # --- Core Asynchronous Function ---
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     """
     Asynchronously processes a document and answers questions about it with
-    a robust, cached hybrid search retriever to ensure speed and accuracy.
+    a fast, pure vector-search retriever and a powerful LLM.
     """
-    global retriever_cache
+    global processed_urls
 
-    # --- CRITICAL FIX: Check if we have already built a retriever for this URL ---
-    if url not in retriever_cache:
-        print(f"New document URL received: {url}. Building retriever for the first time...")
+    # --- DATA INGESTION (only if document is new) ---
+    # This is the "cold start" logic that runs on the first request for a new URL.
+    if url not in processed_urls:
+        print(f"New document URL received: {url}. Ingesting into vector store...")
         # 1. Clear the remote vector store to ensure no data leakage
         await astra_vector_store.aclear()
         
         # 2. Download and process the new document
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
+            response = await client.get(url, timeout=25.0) # Reduced timeout for safety
             response.raise_for_status()
             pdf_content = response.content
         file_path = f"/tmp/{uuid4()}.pdf"
@@ -71,25 +72,14 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         # 3. Add the new documents to the now-empty vector store
         await astra_vector_store.aadd_documents(final_docs)
         
-        # --- BUILD THE HYBRID RETRIEVER ONCE ---
-        # 4. Create the keyword retriever from the new document's chunks
-        bm25_retriever = BM25Retriever.from_documents(final_docs)
-        bm25_retriever.k = 4
-        
-        # 5. Create the vector retriever (which now correctly points to the new data)
-        vector_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 4})
-        
-        # 6. Combine them into the final ensemble retriever
-        ensemble_retriever = EnsembleRetriever(
-            retrievers=[bm25_retriever, vector_retriever], weights=[0.5, 0.5]
-        )
-        
-        # 7. Store the fully-built retriever in the cache
-        retriever_cache[url] = ensemble_retriever
-        print("Retriever for this document has been built and cached.")
+        # 4. Mark this URL as processed
+        processed_urls.add(url)
+        print("Document ingestion complete.")
 
-    # Retrieve the ready-to-use, fast retriever from the cache
-    retriever = retriever_cache[url]
+    # --- SETUP THE FASTEST POSSIBLE RETRIEVER ---
+    # We use a simple vector retriever which is much faster than building a BM25 index.
+    # k=8 provides a good balance of context and speed.
+    retriever = astra_vector_store.as_retriever(search_kwargs={"k": 8})
 
     # QUESTION ANSWERING PIPELINE
     qa_prompt = ChatPromptTemplate.from_template(
@@ -122,7 +112,6 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     
     # --- CONTROLLED CONCURRENCY (To handle OpenAI's rate limits) ---
     final_answers = []
-    # Process in small batches to avoid overwhelming the OpenAI TPM limit.
     batch_size = 3
     
     for i in range(0, len(queries), batch_size):
@@ -132,9 +121,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
         final_answers.extend(answers)
 
-        # Add a small delay between batches to respect time-based rate limits
         if i + batch_size < len(queries):
-            print(f"Batch complete. Waiting for 1 second to respect rate limit...")
             await asyncio.sleep(1)
         
     return final_answers
