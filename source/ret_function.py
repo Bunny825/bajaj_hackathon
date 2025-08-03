@@ -28,7 +28,6 @@ cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
-# We use the fast gpt-3.5-turbo because the re-ranker provides a high-quality context
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
 
 astra_vector_store = Cassandra(
@@ -38,8 +37,10 @@ astra_vector_store = Cassandra(
     keyspace=ASTRA_DB_KEYSPACE,
 )
 
-# A simple in-memory cache to store the fully initialized retriever for each document
-retriever_cache = {}
+# --- Globals for simple, safe caching ---
+# We only store the last URL and its corresponding retriever
+last_processed_url = None
+cached_retriever = None
 
 # --- Core Asynchronous Function ---
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
@@ -47,10 +48,10 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     Asynchronously processes a document and answers questions with a re-ranker
     and maximum concurrency for the best performance.
     """
-    global retriever_cache
+    global last_processed_url, cached_retriever
 
     # Build the retriever once per document and cache it for speed
-    if url not in retriever_cache:
+    if url != last_processed_url:
         print(f"New document URL received: {url}. Building retriever for the first time...")
         await astra_vector_store.aclear()
         
@@ -73,18 +74,24 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         await astra_vector_store.aadd_documents(final_docs)
         
         # --- BUILD THE RETRIEVER ONCE ---
+        # 1. The "normal" retriever casts a wide net to find all possible context
         base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 20})
+        
+        # 2. The re-ranker intelligently filters the results down to the best 3
         compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
+        
+        # 3. Combine them into the final, powerful retriever
         retriever = ContextualCompressionRetriever(
             base_compressor=compressor, base_retriever=base_retriever
         )
         
-        # Store the fully-built retriever in the cache
-        retriever_cache[url] = retriever
-        print("Retriever for this document has been built and cached.")
+        # Store the fully-built retriever and the URL in our global variables
+        cached_retriever = retriever
+        last_processed_url = url
+        print("Retriever for this document has been built and is now active.")
 
-    # Retrieve the ready-to-use, fast retriever from the cache
-    retriever = retriever_cache[url]
+    # Use the currently active retriever
+    retriever = cached_retriever
 
     # QUESTION ANSWERING PIPELINE
     qa_prompt = ChatPromptTemplate.from_template(
