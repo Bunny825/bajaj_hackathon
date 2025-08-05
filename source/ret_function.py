@@ -11,6 +11,9 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_community.vectorstores import Cassandra
+# --- Imports for the Re-ranker ---
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain_cohere import CohereRerank
 
 import cassio
 
@@ -19,13 +22,13 @@ load_dotenv()
 ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
 ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
 ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
-# COHERE_API_KEY is no longer needed
+COHERE_API_KEY = os.getenv("COHERE_API_KEY") # Your new Production Key
 
 cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
 
 astra_vector_store = Cassandra(
     embedding=embeddings,
@@ -34,53 +37,47 @@ astra_vector_store = Cassandra(
     keyspace=ASTRA_DB_KEYSPACE,
 )
 
-# --- Globals for simple, safe caching ---
-# We only store the last URL and its corresponding retriever
-last_processed_url = None
-cached_retriever = None
-
 # --- Core Asynchronous Function ---
 async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     """
-    Asynchronously processes a document and answers questions with a fast,
-    cached, pure vector-search retriever.
+    Asynchronously processes a document and answers questions with a fresh,
+    non-cached re-ranker retriever to guarantee data isolation and accuracy.
     """
-    global last_processed_url, cached_retriever
+    # --- DATA INGESTION AND RETRIEVER SETUP ON EVERY CALL ---
+    # This is the only way to be 100% sure there is no data leakage.
+    print(f"Processing document: {url}. Building fresh retriever...")
+    
+    # 1. Clear the remote vector store to ensure no data leakage from previous runs
+    await astra_vector_store.aclear()
+    
+    # 2. Download and process the new document
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, timeout=30.0)
+        response.raise_for_status()
+        pdf_content = response.content
+    file_path = f"/tmp/{uuid4()}.pdf"
+    with open(file_path, "wb") as f: f.write(pdf_content)
+    loader = UnstructuredFileLoader(file_path)
+    docs = await loader.aload()
+    os.remove(file_path)
+    
+    if not docs:
+        raise ValueError("Failed to load or parse the document content.")
 
-    # Build the retriever once per document and cache it for speed
-    if url != last_processed_url:
-        print(f"New document URL received: {url}. Building retriever for the first time...")
-        await astra_vector_store.aclear()
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
-            response.raise_for_status()
-            pdf_content = response.content
-        file_path = f"/tmp/{uuid4()}.pdf"
-        with open(file_path, "wb") as f: f.write(pdf_content)
-        loader = UnstructuredFileLoader(file_path)
-        docs = await loader.aload()
-        os.remove(file_path)
-        
-        if not docs:
-            raise ValueError("Failed to load or parse the document content.")
-
-        splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=2000, chunk_overlap=200)
-        final_docs = splitter.split_documents(docs)
-        
-        await astra_vector_store.aadd_documents(final_docs)
-        
-        # --- BUILD THE RETRIEVER ONCE ---
-        # k=8 is a safe balance between providing rich context and staying within the model's limit.
-        retriever = astra_vector_store.as_retriever(search_kwargs={"k": 6})
-        
-        # Store the fully-built retriever and the URL in our global variables
-        cached_retriever = retriever
-        last_processed_url = url
-        print("Retriever for this document has been built and is now active.")
-
-    # Use the currently active retriever
-    retriever = cached_retriever
+    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=2000, chunk_overlap=200)
+    final_docs = splitter.split_documents(docs)
+    
+    # 3. Add the new documents to the now-empty vector store
+    await astra_vector_store.aadd_documents(final_docs)
+    
+    # --- BUILD THE RETRIEVER FROM SCRATCH ---
+    base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 10})
+    compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
+    retriever = ContextualCompressionRetriever(
+        base_compressor=compressor, base_retriever=base_retriever
+    )
+    
+    print("Fresh retriever has been built.")
 
     # QUESTION ANSWERING PIPELINE
     qa_prompt = ChatPromptTemplate.from_template(
@@ -111,20 +108,10 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     doc_chain = create_stuff_documents_chain(llm, qa_prompt)
     retrieval_chain = create_retrieval_chain(retriever, doc_chain)
     
-    # --- UNLEASH MAXIMUM SPEED ---
-    # We no longer have Cohere rate limits, so we can process all questions at once.
-    # We still keep the batching logic for OpenAI's rate limits.
-    final_answers = []
-    batch_size = 3
-    
-    for i in range(0, len(queries), batch_size):
-        batch_queries = queries[i:i + batch_size]
-        batch_tasks = [retrieval_chain.ainvoke({"input": query}) for query in batch_queries]
-        results = await asyncio.gather(*batch_tasks)
-        answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
-        final_answers.extend(answers)
-
-        if i + batch_size < len(queries):
-            await asyncio.sleep(1)
+    # --- UNLEASH MAXIMUM SPEED (NO BATCHING) ---
+    # With a production key, we can process all questions at once.
+    tasks = [retrieval_chain.ainvoke({"input": query}) for query in queries]
+    results = await asyncio.gather(*tasks)
+    answers = [result.get("answer", "Error: Could not find an answer.") for result in results]
         
-    return final_answers
+    return answers

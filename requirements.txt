@@ -66,7 +66,7 @@ langchain-community==0.3.27
 langchain-core==0.3.72
 langchain-openai==0.3.28
 langchain-text-splitters==0.3.9
-langchain-unstructured==0.1.6
+unstructured[all-docs]==0.14.8
 langdetect==1.0.9
 langsmith==0.4.8
 lxml==6.0.0
@@ -136,7 +136,6 @@ typing-inspect==0.9.0
 typing-inspection==0.4.1
 typing_extensions==4.14.1
 tzdata==2025.2
-unstructured[pdf]==0.18.11
 unstructured-client==0.41.0
 unstructured-inference==1.0.5
 unstructured.pytesseract==0.3.15
@@ -147,5 +146,6 @@ webencodings==0.5.1
 wrapt==1.17.2
 yarl==1.20.1
 zstandard==0.23.0
+# --- Add Cohere for the Re-ranker ---
+cohere
 langchain-cohere
-rank_bm25
