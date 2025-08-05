@@ -34,8 +34,6 @@ cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 embeddings = OpenAIEmbeddings()
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
 
-
-
 astra_vector_store = Cassandra(
     embedding=embeddings,
     table_name="bajaj_insurance_policy_prod",
@@ -50,22 +48,19 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     to the correct engine (Text RAG or Data Analysis Agent) based on file type.
     """
     
-    print(f"Received queries: {queries}")
+    print(f"Received {len(queries)} queries.")
 
     # --- SMART ROUTER: Check if the file is an XLSX spreadsheet ---
-    # CRITICAL FIX: Check for the extension before any query parameters
-    # --- REFACTORED XLSX BRANCH ---
     if '.xlsx' in url.lower().split('?')[0]:
         print(f"XLSX file detected: {url}. Using Data Analysis Engine...")
         
-        # 1. Download and load from memory (efficiency improvement)
+        # 1. Download and load from memory
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
             df = pd.read_excel(io.BytesIO(response.content))
 
-        # 2. ACCURACY IMPROVEMENT: Pre-process DataFrame
-        # Create clean, LLM-friendly column names
+        # 2. Pre-process DataFrame column names
         original_columns = df.columns.tolist()
         df.columns = [
             col.lower().strip().replace(' ', '_').replace('-', '_').replace('(', '').replace(')', '')
@@ -73,16 +68,15 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         ]
         clean_columns = df.columns.tolist()
         
-        # 3. ACCURACY IMPROVEMENT: Create a detailed prefix prompt (Data Dictionary)
-        # This tells the LLM exactly what the columns are and how to think.
+        # 3. Create a detailed prefix prompt (Data Dictionary)
         data_dictionary = "\n".join([f"- `{clean}` (originally '{orig}')" for clean, orig in zip(clean_columns, original_columns)])
         
+        # --- CRITICAL PROMPT UPDATE ---
+        # Added a new rule to ensure the final answer is plain and direct.
         prefix_prompt = f"""
-        You are a world-class data analyst. Your task is to answer questions about a pandas DataFrame.
-        You will be working with a DataFrame named `df`.
+        You are a world-class data analyst. Your task is to answer questions about a pandas DataFrame by writing and executing Python code.
+        You are working with a DataFrame named `df`.
 
-        **IMPORTANT:** You must generate and execute Python code to find the answer. Do not answer from memory.
-        
         **DataFrame Schema and Context:**
         Here are the columns in the `df` and their original names:
         {data_dictionary}
@@ -90,9 +84,9 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         **Instructions:**
         1. Analyze the user's query.
         2. Write a single Python code block to query the `df` to find the answer.
-        3. The code must be correct and executable.
-        4. You have access to the `df` variable.
-        5. Return the final answer clearly after the observation.
+        3. Execute the code.
+        4. **CRITICAL:** Formulate the final answer based *only* on the result of the executed code.
+        5. The final answer MUST be a direct, plain-language response to the user's question. Do NOT mention the pandas DataFrame, the variable `df`, or the data source in your final answer.
         
         Begin!
         """
@@ -104,7 +98,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
             agent_type="openai-tools", 
             verbose=True, 
             prefix=prefix_prompt, # Injecting our detailed instructions
-            allow_dangerous_code=True # WARNING: Run in a sandboxed environment
+            allow_dangerous_code=True
         )
         
         # 5. Answer all questions concurrently
