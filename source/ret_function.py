@@ -53,39 +53,63 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
 
     # --- SMART ROUTER: Check if the file is an XLSX spreadsheet ---
     # CRITICAL FIX: Check for the extension before any query parameters
+    # --- REFACTORED XLSX BRANCH ---
     if '.xlsx' in url.lower().split('?')[0]:
         print(f"XLSX file detected: {url}. Using Data Analysis Engine...")
         
-        # 1. Download the XLSX file
+        # 1. Download and load from memory (efficiency improvement)
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
-            excel_content = response.content
+            df = pd.read_excel(io.BytesIO(response.content))
 
-        # 2. Load the spreadsheet into a Pandas DataFrame
-        # We use a temporary file to load it with pandas
-        file_path = f"/tmp/{uuid4()}.xlsx"
-        with open(file_path, "wb") as f:
-            f.write(excel_content)
+        # 2. ACCURACY IMPROVEMENT: Pre-process DataFrame
+        # Create clean, LLM-friendly column names
+        original_columns = df.columns.tolist()
+        df.columns = [
+            col.lower().strip().replace(' ', '_').replace('-', '_').replace('(', '').replace(')', '')
+            for col in df.columns
+        ]
+        clean_columns = df.columns.tolist()
         
-        df = pd.read_excel(file_path)
-        os.remove(file_path)
+        # 3. ACCURACY IMPROVEMENT: Create a detailed prefix prompt (Data Dictionary)
+        # This tells the LLM exactly what the columns are and how to think.
+        data_dictionary = "\n".join([f"- `{clean}` (originally '{orig}')" for clean, orig in zip(clean_columns, original_columns)])
         
-        # 3. Create the Pandas DataFrame Agent
-        # This agent can write and execute Python code to answer questions about the data
+        prefix_prompt = f"""
+        You are a world-class data analyst. Your task is to answer questions about a pandas DataFrame.
+        You will be working with a DataFrame named `df`.
+
+        **IMPORTANT:** You must generate and execute Python code to find the answer. Do not answer from memory.
+        
+        **DataFrame Schema and Context:**
+        Here are the columns in the `df` and their original names:
+        {data_dictionary}
+
+        **Instructions:**
+        1. Analyze the user's query.
+        2. Write a single Python code block to query the `df` to find the answer.
+        3. The code must be correct and executable.
+        4. You have access to the `df` variable.
+        5. Return the final answer clearly after the observation.
+        
+        Begin!
+        """
+
+        # 4. Create the Pandas DataFrame Agent with the new context
         agent = create_pandas_dataframe_agent(
             llm, 
             df, 
             agent_type="openai-tools", 
             verbose=True, 
-            allow_dangerous_code=True
+            prefix=prefix_prompt, # Injecting our detailed instructions
+            allow_dangerous_code=True # WARNING: Run in a sandboxed environment
         )
         
-        # 4. Answer all questions concurrently
+        # 5. Answer all questions concurrently
         tasks = [agent.ainvoke({"input": query}) for query in queries]
         results = await asyncio.gather(*tasks)
         
-        # Extract the text output from the agent's response
         answers = [result.get("output", "Error: Could not process the query for the spreadsheet.") for result in results]
         return answers
 
