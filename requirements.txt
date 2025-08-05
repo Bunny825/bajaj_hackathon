@@ -66,7 +66,6 @@ langchain-community==0.3.27
 langchain-core==0.3.72
 langchain-openai==0.3.28
 langchain-text-splitters==0.3.9
-# --- CRITICAL FIX: Let pip resolve the correct versions ---
 unstructured[all-docs]
 langdetect==1.0.9
 langsmith==0.4.8
@@ -137,8 +136,6 @@ typing-inspect==0.9.0
 typing-inspection==0.4.1
 typing_extensions==4.14.1
 tzdata==2025.2
-# unstructured-client, unstructured-inference, and unstructured.pytesseract
-# will be installed automatically by unstructured[all-docs]
 urllib3==2.5.0
 uuid6==2025.0.1
 uvicorn==0.35.0
@@ -146,6 +143,8 @@ webencodings==0.5.1
 wrapt==1.17.2
 yarl==1.20.1
 zstandard==0.23.0
-# --- Add Cohere for the Re-ranker ---
 cohere
 langchain-cohere
+pandas
+openpyxl
+langchain-experimental
