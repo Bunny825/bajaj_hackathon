@@ -71,7 +71,13 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         
         # 3. Create the Pandas DataFrame Agent
         # This agent can write and execute Python code to answer questions about the data
-        agent = create_pandas_dataframe_agent(llm, df, agent_type="openai-tools", verbose=True)
+        agent = create_pandas_dataframe_agent(
+            llm, 
+            df, 
+            agent_type="openai-tools", 
+            verbose=True, 
+            allow_dangerous_code=True
+        )
         
         # 4. Answer all questions concurrently
         tasks = [agent.ainvoke({"input": query}) for query in queries]
