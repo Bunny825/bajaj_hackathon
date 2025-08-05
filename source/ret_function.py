@@ -1,4 +1,5 @@
 import os
+import io
 import asyncio
 import httpx 
 import pandas as pd
