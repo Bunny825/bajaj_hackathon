@@ -32,6 +32,8 @@ cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+llm2 = ChatOpenAI(model="gpt-4o", temperature=0)
+
 
 astra_vector_store = Cassandra(
     embedding=embeddings,
@@ -72,7 +74,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         # 3. Create the Pandas DataFrame Agent
         # This agent can write and execute Python code to answer questions about the data
         agent = create_pandas_dataframe_agent(
-            llm, 
+            llm2, 
             df, 
             agent_type="openai-tools", 
             verbose=True, 
