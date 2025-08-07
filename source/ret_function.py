@@ -47,38 +47,43 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     if file_path_main.endswith('.xlsx'):
         print(f"XLSX file detected: {url}. Using Data Analysis Engine...")
             
-        # 1. Download and load the spreadsheet into a Pandas DataFrame
+        # 1. Download and load the spreadsheet, skipping the initial 13 junk rows.
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
-            df = pd.read_excel(io.BytesIO(response.content))
+            # The key fix is adding skiprows=13 to handle the specific file format
+            df = pd.read_excel(io.BytesIO(response.content), skiprows=13)
 
-        # --- START: DATA CLEANING BLOCK ---
+        # --- START: AUTOMATIC DATA CLEANING BLOCK ---
         print("Cleaning DataFrame...")
         
-        # 2. Clean column headers (lowercase, no spaces)
+        # 2. Clean column headers to be simple and consistent (e.g., "Mobile Number" -> "mobile_number")
         df.columns = [col.strip().lower().replace(' ', '_').replace('-', '_') for col in df.columns]
 
-        # 3. Trim whitespace from all string/object columns
+        # 3. Trim extra whitespace from all text data to prevent mismatches
         for col in df.select_dtypes(include=['object']):
             df[col] = df[col].str.strip()
 
-        # 4. Handle missing values by filling them with 'N/A'
+        # 4. Handle any missing cells to avoid errors
         df.fillna('N/A', inplace=True)
         
         print("DataFrame cleaned. Columns are now:", df.columns.tolist())
-        # --- END: DATA CLEANING BLOCK ---
+        # --- END: AUTOMATIC DATA CLEANING BLOCK ---
 
-        # 5. Create the agent with the CLEANED DataFrame
+        # 5. Define the prefix prompt to guide the agent
+        prefix_prompt = "The data is based on India, so all the results must be based on India."
+
+        # 6. Create the agent with the CLEANED DataFrame and the new prefix
         agent = create_pandas_dataframe_agent(
             llm, 
             df, 
             agent_type="openai-tools", 
             verbose=True, 
-            allow_dangerous_code=True
+            allow_dangerous_code=True,
+            prefix=prefix_prompt
         )
         
-        # ... (rest of the function remains the same)
+        # 7. Execute the queries
         tasks = [agent.ainvoke({"input": query}) for query in queries]
         results = await asyncio.gather(*tasks)
         
