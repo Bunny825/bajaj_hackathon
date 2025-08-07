@@ -34,6 +34,9 @@ session = cassio.config.resolve_session()
 
 # Set the default timeout in seconds
 session.default_timeout = 50.0
+session.default_consistency_level = ConsistencyLevel.LOCAL_ONE
+
+
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
@@ -43,7 +46,6 @@ astra_vector_store = Cassandra(
     table_name="bajaj_insurance_policy_prod",
     session=session,
     keyspace=ASTRA_DB_KEYSPACE,
-    consistency_level=ConsistencyLevel.LOCAL_ONE,
 )
 
 # --- Core Asynchronous Function ---
