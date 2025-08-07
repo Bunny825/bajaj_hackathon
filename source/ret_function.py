@@ -28,7 +28,7 @@ ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
 ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
 COHERE_API_KEY = os.getenv("COHERE_API_KEY") # Your Production Key
 
-cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
+cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID,session_request_timeout=50.0)
 
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
@@ -118,7 +118,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     await astra_vector_store.aclear()
     await astra_vector_store.aadd_documents(final_docs)
     
-    base_retriever = astra_vector_store.as_retriever(search_kwargs={"k": 20})
+    base_retriever = astra_vector_store.as_retriever(search_kwargs={"k":12})
     compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
     retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
     
