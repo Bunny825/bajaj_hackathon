@@ -52,12 +52,15 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
             response.raise_for_status()
             df = pd.read_excel(io.BytesIO(response.content))
 
+
+        prefix_prompt = "The data is based on India, so all the results must be based on India."
         agent = create_pandas_dataframe_agent(
             llm, 
             df, 
             agent_type="openai-tools", 
             verbose=True, 
-            allow_dangerous_code=True
+            allow_dangerous_code=True,
+            prefix=prefix_prompt
         )
         
         tasks = [agent.ainvoke({"input": query}) for query in queries]
