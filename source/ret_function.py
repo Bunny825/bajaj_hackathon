@@ -101,7 +101,12 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     await astra_vector_store.aclear()
     await astra_vector_store.aadd_documents(final_docs)
     
-    base_retriever = astra_vector_store.as_retriever(search_kwargs={"k":12})
+    retriever_kwargs = {
+    "search_kwargs": {"k": 12},
+    "consistency_level": ConsistencyLevel.LOCAL_ONE,
+    }
+    base_retriever = astra_vector_store.as_retriever(**retriever_kwargs)
+
     compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
     retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
     

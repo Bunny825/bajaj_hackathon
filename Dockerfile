@@ -35,7 +35,8 @@ COPY requirements.txt .
 # the massive default version with GPU support.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
-
+RUN python -c "import nltk; nltk.download('punkt'); from unstructured.partition.auto import partition"
+RUN python -c "from unstructured.partition.pdf import partition_pdf; from unstructured.documents.elements import Text; partition_pdf(filename='requirements.txt', strategy='hi_res', file_content_type='text/plain', elements=)"
 
 # ---- Final Stage ----
 # Use the slim image for a smaller final image size
