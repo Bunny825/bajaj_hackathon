@@ -29,14 +29,24 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy only the requirements file to leverage Docker's layer caching
-COPY requirements.txt .
+COPY requirements.txt.
 
 # Install the smaller CPU-only version of PyTorch first to prevent downloading
 # the massive default version with GPU support.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
-RUN python -c "import nltk; nltk.download('punkt'); from unstructured.partition.auto import partition"
-RUN python -c "from unstructured.partition.pdf import partition_pdf; from unstructured.documents.elements import Text; partition_pdf(filename='requirements.txt', strategy='hi_res', file_content_type='text/plain', elements=)"
+
+# ---- Pre-warm application dependencies ----
+# Force download of models required by nltk and unstructured at build time.
+RUN python -c "import nltk; nltk.download('punkt')"
+# The following command triggers the download of hi_res models for unstructured.
+# It will fail to parse the file, but the download is triggered before the failure.
+# The try/except block ensures the build does not stop.
+RUN python -c "from unstructured.partition.pdf import partition_pdf; \
+import warnings; warnings.filterwarnings('ignore'); \
+try: partition_pdf(filename='requirements.txt', strategy='hi_res') \
+except: pass"
+
 
 # ---- Final Stage ----
 # Use the slim image for a smaller final image size
@@ -64,7 +74,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 
 # Copy your application code
-COPY . .
+COPY..
 
 # Activate the virtual environment in the final image
 ENV PATH="/opt/venv/bin:$PATH"
