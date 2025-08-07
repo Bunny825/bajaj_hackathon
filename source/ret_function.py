@@ -33,7 +33,6 @@ cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 session = cassio.config.resolve_session()
 
 # Set the default timeout in seconds
-session.default_timeout = 50.0
 
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
