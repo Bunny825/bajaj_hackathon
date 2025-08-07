@@ -13,6 +13,7 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_unstructured import UnstructuredLoader
 from langchain_community.vectorstores import Cassandra
+from cassandra.cluster import ConsistencyLevel
 # --- Imports for the Re-ranker ---
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain_cohere import CohereRerank
@@ -42,6 +43,7 @@ astra_vector_store = Cassandra(
     table_name="bajaj_insurance_policy_prod",
     session=session,
     keyspace=ASTRA_DB_KEYSPACE,
+    consistency_level=ConsistencyLevel.LOCAL_ONE,
 )
 
 # --- Core Asynchronous Function ---
