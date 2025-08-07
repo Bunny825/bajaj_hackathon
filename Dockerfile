@@ -29,7 +29,6 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy only the requirements file to leverage Docker's layer caching
-# CORRECTED: Added a space between the filename and the destination path '.'
 COPY requirements.txt.
 
 # Install the smaller CPU-only version of PyTorch first to prevent downloading
@@ -75,7 +74,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 
 # Copy your application code
-# CORRECTED: Added a space between the source '.' and destination '.'
 COPY..
 
 # Activate the virtual environment in the final image
