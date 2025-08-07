@@ -28,8 +28,11 @@ ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
 ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
 COHERE_API_KEY = os.getenv("COHERE_API_KEY") # Your Production Key
 
-cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID,session_request_timeout=50.0)
+cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
+session = cassio.config.resolve_session()
 
+# Set the default timeout in seconds
+session.default_timeout = 50.0
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
@@ -37,7 +40,7 @@ llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
 astra_vector_store = Cassandra(
     embedding=embeddings,
     table_name="bajaj_insurance_policy_prod",
-    session=None,
+    session=session,
     keyspace=ASTRA_DB_KEYSPACE,
 )
 
