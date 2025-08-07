@@ -46,12 +46,30 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     
     if file_path_main.endswith('.xlsx'):
         print(f"XLSX file detected: {url}. Using Data Analysis Engine...")
-        
+            
+        # 1. Download and load the spreadsheet into a Pandas DataFrame
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
             df = pd.read_excel(io.BytesIO(response.content))
 
+        # --- START: DATA CLEANING BLOCK ---
+        print("Cleaning DataFrame...")
+        
+        # 2. Clean column headers (lowercase, no spaces)
+        df.columns = [col.strip().lower().replace(' ', '_').replace('-', '_') for col in df.columns]
+
+        # 3. Trim whitespace from all string/object columns
+        for col in df.select_dtypes(include=['object']):
+            df[col] = df[col].str.strip()
+
+        # 4. Handle missing values by filling them with 'N/A'
+        df.fillna('N/A', inplace=True)
+        
+        print("DataFrame cleaned. Columns are now:", df.columns.tolist())
+        # --- END: DATA CLEANING BLOCK ---
+
+        # 5. Create the agent with the CLEANED DataFrame
         agent = create_pandas_dataframe_agent(
             llm, 
             df, 
@@ -60,6 +78,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
             allow_dangerous_code=True
         )
         
+        # ... (rest of the function remains the same)
         tasks = [agent.ainvoke({"input": query}) for query in queries]
         results = await asyncio.gather(*tasks)
         
