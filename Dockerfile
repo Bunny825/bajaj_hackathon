@@ -48,7 +48,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libmagic-dev \
-    # --- Dependencies for OpenCV, graphics, and rendering ---
+    tesseract-ocr \      
+    tesseract-ocr-eng \  
     libgl1-mesa-glx \
     libglib2.0-0 \
     libsm6 \
