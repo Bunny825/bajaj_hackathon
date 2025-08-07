@@ -11,7 +11,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import UnstructuredFileLoader
+from langchain_unstructured import UnstructuredLoader
 from langchain_community.vectorstores import Cassandra
 # --- Imports for the Re-ranker ---
 from langchain.retrievers import ContextualCompressionRetriever
@@ -91,7 +91,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         file_path = f"/tmp/{uuid4()}.pptx"
         with open(file_path, "wb") as f: f.write(content)
         # Using strategy="hi_res" to get one document per slide
-        loader = UnstructuredFileLoader(file_path, strategy="hi_res")
+        loader = UnstructuredLoader(file_path, strategy="hi_res")
         final_docs = await loader.aload()
         os.remove(file_path)
 
@@ -104,7 +104,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
             content = response.content
         file_path = f"/tmp/{uuid4()}.tmp"
         with open(file_path, "wb") as f: f.write(content)
-        loader = UnstructuredFileLoader(file_path)
+        loader = UnstructuredLoader(file_path)
         docs = await loader.aload()
         os.remove(file_path)
         
