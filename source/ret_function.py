@@ -34,8 +34,6 @@ session = cassio.config.resolve_session()
 
 # Set the default timeout in seconds
 session.default_timeout = 50.0
-session.default_consistency_level = ConsistencyLevel.LOCAL_ONE
-
 
 # Initialize components that don't change per request
 embeddings = OpenAIEmbeddings()
