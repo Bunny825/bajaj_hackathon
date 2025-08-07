@@ -148,3 +148,4 @@ langchain-cohere
 pandas
 openpyxl
 langchain-experimental
+langchain-unstructured
