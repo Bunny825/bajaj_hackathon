@@ -28,10 +28,10 @@ COHERE_API_KEY = os.getenv("COHERE_API_KEY") # Your Production Key
 
 cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 session = cassio.config.resolve_session()
-session.default_timeout=50.0
+session.default_timeout=60.0
 
 embeddings = OpenAIEmbeddings()
-llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+llm = ChatOpenAI(model="gpt-4-1106-preview", temperature=0)
 
 astra_vector_store = Cassandra(
     embedding=embeddings,
