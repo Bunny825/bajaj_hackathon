@@ -46,6 +46,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     
     if file_path_main.endswith('.xlsx'):
         print(f"XLSX file detected: {url}. Using Data Analysis Engine...")
+        print(queries)
         
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
@@ -71,7 +72,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
 
     elif file_path_main.endswith('.pptx'):
         print(f"PPTX file detected: {url}. Using Presenter Engine (Slide-by-Slide RAG)...")
-        
+        print(queries)
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
@@ -79,19 +80,20 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
         file_path = f"/tmp/{uuid4()}.pptx"
         with open(file_path, "wb") as f: f.write(content)
         # Using strategy="hi_res" to get one document per slide
-        loader = UnstructuredFileLoader(file_path, strategy="hi_res")
+        loader = UnstructuredFileLoader(file_path, strategy="hi_res",languages=[])
         final_docs = await loader.aload()
         os.remove(file_path)
 
     else:
         print(f"Text document detected: {url}. Using Librarian Engine (Standard RAG)...")
+        print(queries)
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
             content = response.content
         file_path = f"/tmp/{uuid4()}.tmp"
         with open(file_path, "wb") as f: f.write(content)
-        loader = UnstructuredFileLoader(file_path)
+        loader = UnstructuredFileLoader(file_path,languages=[])
         docs = await loader.aload()
         os.remove(file_path)
         
@@ -110,7 +112,7 @@ async def insurance_answer(url: str, queries: list[str]) -> list[str]:
     }
     base_retriever = astra_vector_store.as_retriever(**retriever_kwargs)
 
-    compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-english-v3.0")
+    compressor = CohereRerank(cohere_api_key=COHERE_API_KEY, top_n=3, model="rerank-multilingual-v3.0")
     retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
     
     print("Fresh RAG retriever has been built.")
